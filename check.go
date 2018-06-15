@@ -105,6 +105,20 @@ func (c *C) stopNow() {
 	runtime.Goexit()
 }
 
+func (c *C) fork() *C {
+	return &C{
+		_status:   c._status,
+		logb:      c.logb,
+		logw:      c.logw,
+		reason:    c.reason,
+		mustFail:  c.mustFail,
+		tempDir:   c.tempDir,
+		benchMem:  c.benchMem,
+		startTime: c.startTime,
+		timer:     c.timer,
+	}
+}
+
 // logger is a concurrency safe byte.Buffer
 type logger struct {
 	sync.Mutex
@@ -607,7 +621,7 @@ func newSuiteRunner(suite interface{}, runConf *RunConf) *suiteRunner {
 func (runner *suiteRunner) run() *Result {
 	if runner.tracker.result.RunError == nil && len(runner.tests) > 0 {
 		runner.tracker.start()
-		c := runner.makeContext(nil)
+		c := runner.makeContext()
 		if runner.checkFixtureArgs(c) {
 			runner.runFixture(c, runner.setUpSuite, "")
 			if c.status() == succeededSt {
@@ -639,16 +653,13 @@ func (runner *suiteRunner) run() *Result {
 
 // makeContext creates a context for check that we can thread
 // through all the tests.
-func (runner *suiteRunner) makeContext(logb *logger) *C {
+func (runner *suiteRunner) makeContext() *C {
 	var logw io.Writer
 	if runner.output.Stream {
 		logw = runner.output
 	}
-	if logb == nil {
-		logb = new(logger)
-	}
 	return &C{
-		logb:      logb,
+		logb:      new(logger),
 		logw:      logw,
 		tempDir:   runner.tempDir,
 		timer:     timer{benchTime: runner.benchTime},
@@ -757,11 +768,11 @@ func (runner *suiteRunner) forkTest(c *C, method *methodType) <-chan *C {
 	testName := method.String()
 	return runner.forkCall(c, method, testKd, testName, func(c *C) {
 		var skipped bool
-		defer runner.runFixtureWithPanic(c, runner.tearDownTest, testName, &skipped)
+		defer runner.runFixtureWithPanic(c.fork(), runner.tearDownTest, testName, &skipped)
 		defer c.StopTimer()
 		benchN := 1
 		for {
-			runner.runFixtureWithPanic(c, runner.setUpTest, testName, &skipped)
+			runner.runFixtureWithPanic(c.fork(), runner.setUpTest, testName, &skipped)
 			mt := c.method.Type()
 			if mt.NumIn() != 1 || mt.In(0) != reflect.TypeOf(c) {
 				// Rather than a plain panic, provide a more helpful message when
@@ -802,7 +813,7 @@ func (runner *suiteRunner) forkTest(c *C, method *methodType) <-chan *C {
 			benchN = roundUp(benchN)
 
 			skipped = true // Don't run the deferred one if this panics.
-			runner.runFixtureWithPanic(c, runner.tearDownTest, testName, nil)
+			runner.runFixtureWithPanic(c.fork(), runner.tearDownTest, testName, nil)
 			skipped = false
 		}
 	})
